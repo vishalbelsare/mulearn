@@ -1,6 +1,6 @@
 # mulearn
 
-[![Documentation Status](https://readthedocs.org/projects/mulearn-mr/badge/?version=latest)](https://mulearn-mr.readthedocs.io/en/latest/?badge=latest)
+[![Documentation Status](https://readthedocs.org/projects/mulearn/badge/?version=latest)](https://mulearn.readthedocs.io/en/latest/?badge=latest)
 
 > A python package for inducing membership functions from labeled data
 
@@ -15,7 +15,6 @@ mulearn is a python package implementing the metodology for data-driven inductio
 The package can easily be installed:
 
 - via `pip`, by running `pip install mulearn` in a terminal;
-- through `conda`, by running `conda install -c dariomalchiodi mulearn`;
 - cloning this repo.
 
 APIs are described at https://mulearn.readthedocs.io/.

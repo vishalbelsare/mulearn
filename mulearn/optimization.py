@@ -8,10 +8,6 @@ installed (notably, Gurobi and TensorFlow), emitting a warning otherwise.
 Note that at least one of these libraries is needed in order to solve the
 optimization problems involved in the fuzzy inference process.
 
-The module also checks the availability of tqdm, which is used in order to
-graphically depict the progress of some learning processes using a progress
-bar. However, this package is not strictly needed: if it is not installed,
-the above mentioned progress bars will not be displayed.
 """
 
 import numpy as np
@@ -37,7 +33,6 @@ try:
     import os
 
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    logging.getLogger('tensorflow').setLevel(logging.FATAL)
     import tensorflow as tf
 
     tensorflow_ok = True
@@ -99,6 +94,10 @@ class Solver:
                     for ch, l, u in zip(chis, -c * (1 - mus), c * mus)] # noqa
 
         return chis_opt
+    
+    def __eq__(self, other):
+        """Check solver equality w.r.t. other objects."""
+        return type(self) is type(other) and self.__dict__ == other.__dict__
 
 
 class GurobiSolver(Solver):
@@ -200,7 +199,7 @@ class GurobiSolver(Solver):
                     constEqual = LinExpr()
                     constEqual.add(sum(chis), 1.0)
     
-                    model.addConstr(constEqual, GRB.EQUAL, 1)
+                    model.addConstr(constEqual == 1)
     
                     try:
                         model.optimize()
@@ -238,7 +237,7 @@ class GurobiSolver(Solver):
                             logger.warning('gurobi: optimization terminated with a sub-optimal solution!')
 
                         else:
-                            raise ValueError(f'gurobi: optimal solution not found! ERROR CODE: {model.Status}')
+                            logger.warning(f'gurobi: optimal solution not found! ERROR CODE: {model.Status}')
                             
     
                     return [ch.x for ch in chis]

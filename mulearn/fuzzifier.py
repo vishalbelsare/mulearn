@@ -3,6 +3,7 @@
 """
 
 import copy
+import logging
 import warnings
 
 import json_fix
@@ -12,12 +13,17 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 np.seterr(over='ignore')
 
+logger = logging.getLogger(__name__)
+
 def _safe_exp(r):
     with np.errstate(over="raise"):
         try:
             return np.exp(r)
         except FloatingPointError:
             return 1
+
+def exp_clip(a):
+    return np.where(a > 0, 1, np.exp(a))
 
 
 class Fuzzifier:
@@ -41,7 +47,7 @@ class Fuzzifier:
         raise NotImplementedError(
             'The base class does not implement the `get_membership` method')
 
-    def get_profile(self, X):
+    def get_profile(self, squared_R):
         r"""Return information about the learnt membership function profile.
 
         The profile of a membership function $\mu: X \rightarrow [0, 1]$ is
@@ -72,11 +78,9 @@ class Fuzzifier:
         :returns: list -- $[r_{\mathrm{data}}, \tilde{r}_\mathrm{data}, e]$.
 
         """
-        rdata = list(self.x_to_sq_dist(X)**0.5)
-        #print(self.x_to_sq_dist(X))
-        rdata_synth = np.linspace(0, max(rdata) * 1.1, 200)
-        estimate = list(self._get_r_to_mu()(rdata_synth))
-        return [rdata, rdata_synth, estimate]
+        rdata_synth = np.linspace(0, max(squared_R) * 1.1, 200)
+        estimate = self.get_membership(rdata_synth)
+        return [squared_R, rdata_synth, estimate]
 
     def __str__(self):
         """Return the string representation of a fuzzifier."""
@@ -84,7 +88,7 @@ class Fuzzifier:
 
     def __eq__(self, other):
         """Check fuzzifier equality w.r.t. other objects."""
-        return type(self) == type(other)
+        return type(self) is type(other) and self.__dict__ == other.__dict__
 
     def __ne__(self, other):
         """Check fuzzifier inequality w.r.t. other objects."""
@@ -177,11 +181,18 @@ class CrispFuzzifier(Fuzzifier):
                 result[r > threshold] = 0
                 return result
 
-            self.threshold_, _ = curve_fit(r2_to_mu, squared_R, mu, 
-                                          bounds=((0,), (np.inf,)))
-            
-            if self.threshold_ < 0:
-                raise ValueError("Profile fit returned a negative parameter")
+            try:
+                [t_opt], _ = curve_fit(r2_to_mu, squared_R, mu, 
+                                    bounds=((0,), (np.inf,)))
+                self.threshold_ = t_opt
+                
+                if self.threshold_ < 0:
+                    logger.warning("Profile fit returned a negative parameter "
+                                   f"({self.threshold_})")
+            except RuntimeError:
+                # interpolation could not take place, fall back to fixed profile
+                self.profile = 'fixed'
+                self.fit(squared_R, mu, squared_radius)
             
         else:
             raise ValueError("'profile' parameter should either be equal to "
@@ -189,7 +200,7 @@ class CrispFuzzifier(Fuzzifier):
     
     def get_membership(self, R_2):
         check_is_fitted(self, 'threshold_')
-        return [1 if r_2 < self.threshold_ else 0 for r_2 in R_2]
+        return np.array([1 if r_2 < self.threshold_ else 0 for r_2 in R_2])
 
 
 class LinearFuzzifier(Fuzzifier):
@@ -260,9 +271,9 @@ class LinearFuzzifier(Fuzzifier):
                 
                 return result
 
-            r_2_1_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
-                                 p0=(r_2_1_guess,),
-                                 bounds=((0,), (np.inf,)))
+            [r_2_1_opt], _ = curve_fit(r2_to_mu, squared_R, mu,
+                                       p0=(r_2_1_guess,),
+                                       bounds=((0,), (np.inf,)))
             self.slope_ = -1 / (2 * (squared_radius - r_2_1_opt))
             self.intercept_ = 1 + r_2_1_opt / (2 * (squared_radius - r_2_1_opt))
         
@@ -277,11 +288,16 @@ class LinearFuzzifier(Fuzzifier):
                                 0, 1)
                         for r_2 in R_2]
 
-            r_2_05_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
-                                 p0=(r_2_05_guess,),
-                                 bounds=((0,), (np.inf,)))
-            self.slope_ = -1 / (2 * r_2_05_opt)
-            self.intercept_ = 1
+            try:
+                [r_2_05_opt], _ = curve_fit(r2_to_mu, squared_R, mu,
+                                            p0=(r_2_05_guess,),
+                                            bounds=((0,), (np.inf,)))
+                self.slope_ = -1 / (2 * r_2_05_opt)
+                self.intercept_ = 1
+            except RuntimeError:
+                # interpolation could not take place, fall back to fixed profile
+                self.profile = 'fixed'
+                self.fit(squared_R, mu, squared_radius)
 
         elif self.profile == 'infer':
 
@@ -289,26 +305,35 @@ class LinearFuzzifier(Fuzzifier):
                 return [np.clip(1 - (r_2 - r_2_1) / (r_2_0 - r_2_1), 0, 1)
                         for r_2 in R_2]
 
-            p_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
-                                 p0=(r_2_1_guess, r_2_0_guess), 
-                                 bounds=((-np.inf, -np.inf), (np.inf, np.inf,)))
-            r_2_1_opt, r_2_0_opt = p_opt
-            self.slope_ = -1 / (r_2_0_opt - r_2_1_opt)
-            self.intercept_ = 1 + r_2_1_opt / (r_2_0_opt - r_2_1_opt)
+            try:
+                p_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
+                                    p0=(r_2_1_guess, r_2_0_guess), 
+                                    bounds=((-np.inf, -np.inf),
+                                            (np.inf, np.inf,)))
+                r_2_1_opt, r_2_0_opt = p_opt
+                self.slope_ = -1 / (r_2_0_opt - r_2_1_opt)
+                self.intercept_ = 1 + r_2_1_opt / (r_2_0_opt - r_2_1_opt)
+            except RuntimeError:
+                # interpolation could not take place, fall back to fixed profile
+                self.profile = 'fixed'
+                self.fit(squared_R, mu, squared_radius)
+
         else:
             raise ValueError("'profile' parameter should be equal to "
                         "'fixed' or 'infer' (provided value: {self.profile})")
         if self.slope_ > 0:
-            raise ValueError('Profile fitting returned a positive slope')
+            logger.warning('Profile fitting returned a positive slope '
+                            f'({self.slope_})')
         if self.intercept_ < 0:
-            raise ValueError('Profile fitting returned a negative intercept')
+            logger.warning('Profile fitting returned a negative intercept '
+                            f'({self.intercept_})')
         
         return self
 
     def get_membership(self, R_2):
         check_is_fitted(self, ['slope_', 'intercept_'])
-        return [np.clip(self.slope_ * r_2 + self.intercept_, 0, 1)
-                for r_2 in R_2]
+        return np.array([np.clip(self.slope_ * r_2 + self.intercept_, 0, 1)
+                         for r_2 in R_2])
 
 
 class ExponentialFuzzifier(Fuzzifier):
@@ -383,30 +408,34 @@ class ExponentialFuzzifier(Fuzzifier):
 
         if self.profile == "fixed":
             def r2_to_mu(R_2, r_2_1):
-                return [np.clip(_safe_exp( \
-                    -np.log(2) * (r_2 - r_2_1) / (squared_radius - r_2_1)),
-                    0, 1) for r_2 in R_2]
+                return [exp_clip(-np.log(2) * \
+                                 (r_2 - r_2_1) / (squared_radius - r_2_1))
+                        for r_2 in R_2]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                r_2_1_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
-                                     p0=(r_2_1_guess,), maxfev=2000,
-                                     bounds=((0,), (np.inf,)))
-                self.slope_ = -np.log(2) / (squared_radius - r_2_1_opt)
-                self.intercept_ = r_2_1_opt * np.log(2)/(squared_radius - r_2_1_opt)
-            
+                [r_2_1_opt], _ = curve_fit(r2_to_mu, squared_R, mu,
+                                           p0=(r_2_1_guess,), maxfev=2000,
+                                           bounds=((0,), (np.inf,)))
+                denominator = squared_radius - r_2_1_opt
+                self.slope_ = -np.log(2) / denominator
+                self.intercept_ = r_2_1_opt * np.log(2) / denominator
 
         elif self.profile == "infer":
             def r2_to_mu(R_2, r_2_1, s):
-                return [np.clip(_safe_exp(-(r_2 - r_2_1) / s), 0, 1)
-                        for r_2 in R_2]
+                return [exp_clip(-(r_2 - r_2_1) / s) for r_2 in R_2]
 
-            p_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
-                                 p0=(r_2_1_guess, s_guess),
-                                 # bounds=((0, 0), (np.inf, np.inf)),
-                                 maxfev=2000)
-            r_2_1_opt, s_opt = p_opt
-            self.slope_ = -1 / s_opt
-            self.intercept_ = r_2_1_opt / s_opt
+            try:
+                p_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
+                                    p0=(r_2_1_guess, s_guess),
+                                    # bounds=((0, 0), (np.inf, np.inf)),
+                                    maxfev=2000)
+                r_2_1_opt, s_opt = p_opt
+                self.slope_ = -1 / s_opt
+                self.intercept_ = r_2_1_opt / s_opt
+            except RuntimeError:
+                # interpolation could not take place, fall back to fixed profile
+                self.profile = 'fixed'
+                self.fit(squared_R, mu, squared_radius)
 
         elif isinstance(self.profile, (int, float)):
             alpha = self.profile
@@ -414,30 +443,42 @@ class ExponentialFuzzifier(Fuzzifier):
                 inner = [r_2 - r_2_1 for r_2 in squared_R if r_2 > r_2_1]
                 if len(inner) > 0:
                     q = np.percentile(inner, 100 * alpha)
-                    return [np.clip(_safe_exp(np.log(alpha) / q * (r_2 - r_2_1)),
-                                    0, 1) for r_2 in R_2]
+                    return [exp_clip(np.log(alpha) / q * (r_2 - r_2_1))
+                            for r_2 in R_2]
                 else:
                     # all points have within the sphere -> unit membership
                     return [1] * len(R_2)
 
-            r_2_1_opt, _ = curve_fit(r2_to_mu, squared_R, mu,
-                                     p0=(r_2_1_guess,),
-                                     bounds=((0,), (np.inf,)))
-            inner = [r_2 - r_2_1_opt for r_2 in squared_R if r_2 > r_2_1_opt]
-            q = np.percentile(inner, 100 * alpha)
-            self.slope_ = np.log(alpha) / q
-            self.intercept_ = -r_2_1_opt * np.log(alpha) / q
+            try:
+                [r_2_1_opt], _ = curve_fit(r2_to_mu, squared_R, mu,
+                                        p0=(r_2_1_guess,),
+                                        bounds=((0,), (np.inf,)))
+                inner = [r_2 - r_2_1_opt for r_2 in squared_R if r_2 > r_2_1_opt]
+                q = np.percentile(inner, 100 * alpha)
+                self.slope_ = np.log(alpha) / q
+                self.intercept_ = -r_2_1_opt * np.log(alpha) / q
+            except RuntimeError:
+                # interpolation could not take place, fall back to fixed profile
+                self.profile = 'fixed'
+                self.fit(squared_R, mu, squared_radius)
             
         else:
             raise ValueError("'self.profile' attribute should be equal to "
                              "'infer', 'fixed' or 'alpha' "
                              f"(provided value: {self.profile})")
         
+        if self.slope_ > 0:
+            logger.warning('Profile fitting returned a positive slope '
+                            f'({self.slope_})')
+        if self.intercept_ < 0:
+            logger.warning('Profile fitting returned a negative intercept '
+                            f'({self.intercept_})')
+        
         return self
     
     def get_membership(self, R_2):
         check_is_fitted(self, ['slope_', 'intercept_'])
-        return np.clip(np.exp(self.slope_ * R_2 + self.intercept_), 0, 1)
+        return exp_clip(self.slope_ * R_2 + self.intercept_)
 
 
 class QuantileConstantPiecewiseFuzzifier(Fuzzifier):
@@ -488,8 +529,7 @@ class QuantileConstantPiecewiseFuzzifier(Fuzzifier):
         assert len(squared_R) == len(mu)
 
         self.r_2_1_ = np.median([r_2 for r_2, m in zip(squared_R, mu)
-                               if m >= max(m)*0.99])
-        
+                               if m >= max(mu)*0.99])
         
         external_dist = [r_2 - self.r_2_1_ for r_2 in squared_R
                                            if r_2 > self.r_2_1_]
@@ -505,11 +545,11 @@ class QuantileConstantPiecewiseFuzzifier(Fuzzifier):
     
     def get_membership(self, R_2):
         check_is_fitted(self, ['r_2_1_', 'm_', 'q1_', 'q3_'])
-        return [1 if r_2 <= self.r_2_1_ \
-                else 0.75 if r_2 <= self.r_2_1_ + self.q1_ \
-                else 0.5 if r_2 <= self.r_2_1_ + self.m_ \
-                else 0.25 if r_2 <= self.r_2_1_ + self.q3_ \
-                else 0 for r_2 in R_2]
+        return np.array([1 if r_2 <= self.r_2_1_ \
+                         else 0.75 if r_2 <= self.r_2_1_ + self.q1_ \
+                         else 0.5 if r_2 <= self.r_2_1_ + self.m_ \
+                         else 0.25 if r_2 <= self.r_2_1_ + self.q3_ \
+                         else 0 for r_2 in R_2])
 
 
 class QuantileLinearPiecewiseFuzzifier(Fuzzifier):
@@ -554,7 +594,7 @@ class QuantileLinearPiecewiseFuzzifier(Fuzzifier):
         assert len(squared_R) == len(mu)
 
         self.r_2_1_ = np.median([r_2 for r_2, m in zip(squared_R, mu)
-                               if m >= max(m)*0.99])
+                               if m >= max(mu)*0.99])
         
         
         external_dist = [r_2 - self.r_2_1_ for r_2 in squared_R
@@ -572,15 +612,15 @@ class QuantileLinearPiecewiseFuzzifier(Fuzzifier):
         
     def get_membership(self, R_2):
         check_is_fitted(self, ['r_2_1_', 'm_', 'q1_', 'q3_'])
-        return [1 if r_2 <= self.r_2_1_ \
+        return np.array([1 if r_2 <= self.r_2_1_ \
                 else (-r_2+self.r_2_1_)/(4*self.m_) + 1 \
                             if r_2 <= self.r_2_1_+self.q1_ \
-                else (-r_2+self.r_2_1_+self.q1_)/(4*(self.m_-self.m_)) + 3/4 \
+                else (-r_2+self.r_2_1_+self.q1_)/(4*(self.m_-self.q1_)) + 3/4 \
                             if r_2 <= self.r_2_1_+self.m_ \
                 else (-r_2+self.r_2_1_+self.m_)/(4*(self.q3_-self.m_)) + 1/2 \
                             if r_2 <= self.r_2_1_+self.q3_ \
                 else (-r_2+self.r_2_1_+self.q3_)/(4*(self.max_-self.q3_)) + 1/4\
                             if r_2 <= self.r_2_1_+self.max_\
-                else 0 for r_2 in R_2]
+                else 0 for r_2 in R_2])
 
     

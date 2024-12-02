@@ -1,126 +1,215 @@
-from unittest import TestCase
+import json
+import numpy as np
+import os
+import pickle
+import unittest
 
-from tests.kernel import *
+import mulearn.kernel as kernel
+
+class BaseTest:
+    def _test_serialize(self, kernel):
+        s = pickle.dumps(kernel)  
+        kernel_clone = pickle.loads(s)
+        self.assertEqual(kernel, kernel_clone)
+    
+    def _test_persist(self, kernel):
+        with open('object.pickle', 'wb') as f:
+            pickle.dump(kernel, f)
+
+        with open('object.pickle', 'rb') as f:
+            kernel_clone = pickle.load(f)
+
+        os.remove('object.pickle')
+
+        self.assertEqual(kernel, kernel_clone)
+    
+    def _test_json(self, kernel, target):
+        s = json.dumps(kernel)
+        repr = json.loads(s)
+        self.assertEqual(repr, target)
 
 
-class TestLinearKernel(TestCase):
+class Test_LinearKernel(BaseTest, unittest.TestCase):
     def test_compute(self):
-        k = LinearKernel()
+        k =kernel.LinearKernel()
         self.assertEqual(k.compute(np.array([1, 0, 1]).reshape(1,-1), 
                                    np.array([2, 2, 2]).reshape(1,-1)), 4)
         self.assertEqual(k.compute(np.array((1, 0, 2)).reshape(1,-1), 
                                    np.array((-1, 2, 5)).reshape(1,-1)), 9)
                          
-        self.assertAlmostEqual(k.compute(np.array([1.2, -0.4, -2]).reshape(1,-1), 
-                                         np.array([4, 1.2, .5]).reshape(1,-1))[0], 3.32)
-        self.assertAlmostEqual(k.compute(np.array((1.2, -0.4, -2)).reshape(1,-1), 
-                                         np.array([4, 1.2, .5]).reshape(1,-1))[0], 3.32)
+        self.assertAlmostEqual(k.compute(
+                    np.array([1.2, -0.4, -2]).reshape(1,-1), 
+                    np.array([4, 1.2, .5]).reshape(1,-1))[0], 3.32)
+        self.assertAlmostEqual(k.compute(
+                    np.array((1.2, -0.4, -2)).reshape(1,-1), 
+                    np.array([4, 1.2, .5]).reshape(1,-1))[0], 3.32)
 
         with self.assertRaises(ValueError):
             k.compute(np.array([1, 0, 1]).reshape(1,-1), 
                       np.array([2, 2]).reshape(1,-1))
+            
+    def test_serialize(self):
+        self._test_serialize(kernel.LinearKernel())
+    
+    def test_persists(self):
+        self._test_persist(kernel.LinearKernel())
+    
+    def test_json(self):
+        self._test_json(kernel.LinearKernel(),
+                        {'class': 'LinearKernel'})
 
 
-class TestPolynomialKernel(TestCase):
+class TestPolynomialKernel(BaseTest, unittest.TestCase):
     def test_compute(self):
         with self.assertRaises(ValueError):
-            PolynomialKernel(3.2)
+            kernel.PolynomialKernel(3.2)
 
         with self.assertRaises(ValueError):
-            PolynomialKernel(-2)
+            kernel.PolynomialKernel(-2)
 
-        p = PolynomialKernel(2)
+        p = kernel.PolynomialKernel(2)
         self.assertEqual(p.compute(np.array((1, 0, 2)).reshape(1,-1), 
                                    np.array((-1, 2, 5)).reshape(1,-1)), 100)
-        self.assertAlmostEqual(p.compute(np.array([1.2, -0.4, -2]).reshape(1,-1), 
-                                         np.array([4, 1.2, .5]).reshape(1,-1)),
-                               18.6624)
+        self.assertAlmostEqual(p.compute(
+                    np.array([1.2, -0.4, -2]).reshape(1,-1), 
+                    np.array([4, 1.2, .5]).reshape(1,-1)), 18.6624)
 
-        p = PolynomialKernel(5)
+        p = kernel.PolynomialKernel(5)
         self.assertEqual(p.compute(np.array((1, 0, 2)).reshape(1,-1), 
                                    np.array([-1, 2, 5]).reshape(1,-1)), 10 ** 5)
-        self.assertAlmostEqual(p.compute(np.array((1.2, -0.4, -2)).reshape(1,-1), 
-                                         np.array((4, 1.2, .5)).reshape(1,-1)),
-                               1504.59195, delta=10**-6)
+        self.assertAlmostEqual(p.compute(
+                    np.array((1.2, -0.4, -2)).reshape(1,-1), 
+                    np.array((4, 1.2, .5)).reshape(1,-1)),
+                1504.59195, delta=10**-6)
 
         with self.assertRaises(ValueError):
             p.compute(np.array((1, 0, 2)).reshape(1,-1), 
                       np.array((-1, 2)).reshape(1,-1))
+    
+    def test_serialize(self):
+        for d in [2, 5]:
+            self._test_serialize(kernel.PolynomialKernel(d))
+    
+    def test_persists(self):
+        for d in [2, 5]:
+            self._test_persist(kernel.PolynomialKernel(d))
+    
+    def test_json(self):
+        for d in [2, 5]:
+            self._test_json(kernel.PolynomialKernel(d),
+                        {'class': 'PolynomialKernel', 'degree': d})
 
 
 
-class TestHomogeneousPolynomialKernel(TestCase):
+class TestHomogeneousPolynomialKernel(BaseTest, unittest.TestCase):
     def test_compute(self):
         with self.assertRaises(ValueError):
-            HomogeneousPolynomialKernel(3.2)
+            kernel.HomogeneousPolynomialKernel(3.2)
 
         with self.assertRaises(ValueError):
-            HomogeneousPolynomialKernel(-2)
+            kernel.HomogeneousPolynomialKernel(-2)
 
-        h = HomogeneousPolynomialKernel(2)
+        h = kernel.HomogeneousPolynomialKernel(2)
         self.assertEqual(h.compute(np.array((1, 0, 2)).reshape(1,-1), 
                                    np.array((-1, 2, 5)).reshape(1,-1)), 81.0)
-        self.assertAlmostEqual(h.compute(np.array([1.2, -0.4, -2]).reshape(1,-1), 
-                                         np.array([4, 1.2, .5]).reshape(1,-1))[0], 11.0224)
+        self.assertAlmostEqual(h.compute(
+                    np.array([1.2, -0.4, -2]).reshape(1,-1), 
+                    np.array([4, 1.2, .5]).reshape(1,-1))[0], 11.0224)
 
-        h = HomogeneousPolynomialKernel(5)
-        self.assertEqual(h.compute(np.array((1, 0, 2)).reshape(1,-1), 
-                                   np.array([-1, 2, 5]).reshape(1,-1)) , 59049.0)
-        self.assertAlmostEqual(h.compute(np.array((1.2, -0.4, -2)).reshape(1,-1), 
-                                         np.array((4, 1.2, .5)).reshape(1,-1)),
-                               403.357761, delta=10**-6)
+        h = kernel.HomogeneousPolynomialKernel(5)
+        self.assertEqual(h.compute(
+                    np.array((1, 0, 2)).reshape(1,-1), 
+                    np.array([-1, 2, 5]).reshape(1,-1)) , 59049.0)
+        self.assertAlmostEqual(h.compute(
+                    np.array((1.2, -0.4, -2)).reshape(1,-1), 
+                    np.array((4, 1.2, .5)).reshape(1,-1)),
+                403.357761, delta=10**-6)
 
         with self.assertRaises(ValueError):
             h.compute(np.array((1, 0, 2)).reshape(1,-1), 
                       np.array((-1, 2)).reshape(1,-1))
 
+    def test_serialize(self):
+        for d in [2, 5]:
+            self._test_serialize(kernel.HomogeneousPolynomialKernel(d))
 
-class TestGaussianKernel(TestCase):
+
+class TestGaussianKernel(BaseTest, unittest.TestCase):
     def test_compute(self):
         with self.assertRaises(ValueError):
-            GaussianKernel(-5)
+            kernel.GaussianKernel(-5)
 
-        k = GaussianKernel(1)
+        k = kernel.GaussianKernel(1)
         self.assertAlmostEqual(k.compute(np.array((1, 0, 1)).reshape(1,-1), 
-                                         np.array((0, 0, 1)).reshape(1,-1))[0], 0.60653065)
-        self.assertAlmostEqual(k.compute(np.array([-3, 1, 0.5]).reshape(1,-1), 
-                                         np.array([1, 1.2, -8]).reshape(1,-1))[0], 6.73e-20)
-        self.assertAlmostEqual(k.compute(np.array([-1, -4, 3.5]).reshape(1,-1), 
-                                         np.array((1, 3.2, 6)).reshape(1,-1))[0], 3.29e-14)
+                                         np.array((0, 0, 1)).reshape(1,-1))[0],
+                               0.60653065)
+        self.assertAlmostEqual(k.compute(
+                    np.array([-3, 1, 0.5]).reshape(1,-1), 
+                    np.array([1, 1.2, -8]).reshape(1,-1))[0], 6.73e-20)
+        self.assertAlmostEqual(k.compute(
+                    np.array([-1, -4, 3.5]).reshape(1,-1), 
+                    np.array((1, 3.2, 6)).reshape(1,-1))[0], 3.29e-14)
 
         with self.assertRaises(ValueError):
             k.compute(np.array([-1, 3.5]).reshape(1,-1), 
                       np.array((1, 3.2, 6)).reshape(1,-1))
+            
+    def test_serialize(self):
+        for sigma in [0.1, 1]:
+            self._test_serialize(kernel.GaussianKernel(sigma))
 
 
-class TestHyperbolicKernel(TestCase):
+class TestHyperbolicKernel(BaseTest, unittest.TestCase):
     def test_compute(self):
-        k = HyperbolicKernel(1, 5)
-        self.assertAlmostEqual(k.compute(np.array((1, 0, 1)).reshape(1,-1), 
-                                         np.array((0, 0, 1)).reshape(1,-1))[0], 0.9999877)
-        self.assertAlmostEqual(k.compute(np.array([-3, 1, 0.5]).reshape(1,-1), 
-                                         np.array([1, 1.2, -8]).reshape(1,-1))[0],
-                               -0.6640367, delta=10**-7)
-        self.assertAlmostEqual(k.compute(np.array([-1, -4, 3.5]).reshape(1,-1), 
-                                         np.array((1, 3.2, 6)).reshape(1,-1))[0],
-                               0.9999999, delta=10**-7)
+        k = kernel.HyperbolicKernel(1, 5)
+        self.assertAlmostEqual(k.compute(
+                    np.array((1, 0, 1)).reshape(1,-1), 
+                    np.array((0, 0, 1)).reshape(1,-1))[0], 0.9999877)
+        self.assertAlmostEqual(k.compute(
+                    np.array([-3, 1, 0.5]).reshape(1,-1), 
+                    np.array([1, 1.2, -8]).reshape(1,-1))[0],
+                -0.6640367, delta=10**-7)
+        self.assertAlmostEqual(k.compute(
+                    np.array([-1, -4, 3.5]).reshape(1,-1), 
+                    np.array((1, 3.2, 6)).reshape(1,-1))[0],
+                0.9999999, delta=10**-7)
 
         with self.assertRaises(ValueError):
             k.compute(np.array([-1, 3.5]).reshape(1,-1), 
                       np.array((1, 3.2, 6)).reshape(1,-1))
+    
+    def test_serialize(self):
+        for alpha in [0.1, 1]:
+            for beta in [0.1, 1]:
+                self._test_serialize(kernel.HyperbolicKernel(alpha, beta))
 
 
-class TestPrecomputedKernel(TestCase):
+class TestPrecomputedKernel(BaseTest, unittest.TestCase):
+    def setUp(self):
+        self.kernel = kernel.PrecomputedKernel(np.array(([1, 2], [3, 4])))
+
     def test_compute(self):
         with self.assertRaises(ValueError):
-            PrecomputedKernel(np.array(((1, 2), (3, 4, 5))))
+            kernel.PrecomputedKernel(np.array(([1, 2], [3, 4, 5])))
 
-        k = PrecomputedKernel(np.array(((1, 2), (3, 4))))
-        self.assertEqual(k.compute(np.array([1]).reshape(1,-1), np.array([1]).reshape(1,-1)), 4.0)
-        self.assertEqual(k.compute(np.array([1]).reshape(1,-1), np.array([0]).reshape(1,-1)), 3.0)
+        self.assertEqual(self.kernel.compute(
+                    np.array([1]).reshape(1,-1),
+                    np.array([1]).reshape(1,-1)), [4.0])
+        self.assertEqual(self.kernel.compute(
+                    np.array([1]).reshape(1,-1),
+                    np.array([0]).reshape(1,-1)), [3.0])
 
         with self.assertRaises(IndexError):
-            k.compute(np.array([1]).reshape(1,-1), np.array([2]).reshape(1,-1))
+            self.kernel.compute(np.array([1]).reshape(1,-1),
+                               np.array([2]).reshape(1,-1))
 
         with self.assertRaises(IndexError):
-            k.compute(np.array([0]).reshape(1,-1), np.array([1.6]).reshape(1,-1))
+            self.kernel.compute(np.array([0]).reshape(1,-1),
+                                np.array([1.6]).reshape(1,-1))
+            
+    def test_serialize(self):
+        self._test_serialize(self.kernel)
+
+
+if __name__ == '__main__':
+    unittest.main()

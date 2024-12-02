@@ -45,6 +45,7 @@ dependencies:
   - mkdocs==1.2.3
   - pip:
     #- commonmark==0.9.1
+    - json_fix
     #- jeepney==0.6.0
     #- keyring==21.5.0
     - pkginfo==1.6.1
